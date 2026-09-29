@@ -1166,8 +1166,13 @@ class T5Gemma2Encoder(nn.Module):
                 loaded_params.add(name)
 
         if self.vision_tower is not None and vision_weights:
-            for name in self.vision_tower.load_weights(vision_weights):
-                loaded_params.add(f"vision_tower.{name}")
+            vision_load_weights = getattr(self.vision_tower, "load_weights", None)
+            if callable(vision_load_weights):
+                for name in vision_load_weights(vision_weights):
+                    loaded_params.add(f"vision_tower.{name}")
+            # Some text-only checkpoint variants expose a SiglipVisionModel
+            # without load_weights. Ignoring its unused vision weights does not
+            # add image support; image inputs remain unsupported for that model.
 
         return loaded_params
 

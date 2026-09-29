@@ -39,3 +39,17 @@ def test_dflare_loader_marks_own_embedding_and_lm_head() -> None:
     assert model.has_own_lm_head
     assert model.model.loaded_names == ["embed_tokens.weight"]
     torch.testing.assert_close(model.lm_head.weight, torch.ones(2, 3))
+
+
+def test_encoder_skips_vision_weights_without_vision_loader() -> None:
+    from t5gemma2_vllm_plugin.t5gemma2_encoder import T5Gemma2Encoder
+
+    encoder = T5Gemma2Encoder.__new__(T5Gemma2Encoder)
+    nn.Module.__init__(encoder)
+    encoder.vision_tower = nn.Identity()
+
+    loaded = encoder.load_weights(
+        [("vision_tower.proj.weight", torch.ones(2, 2))]
+    )
+
+    assert loaded == set()

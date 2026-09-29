@@ -252,6 +252,30 @@ class MergedCrossAttention(nn.Module):
         if cross_meta is not None and self_kv_cache.numel() and cross_kv_cache.numel():
             if positions is None:
                 raise ValueError("positions are required for paged merged attention")
+            if self_kv_cache.ndim < 2 or self_kv_cache.shape[1] != 2 or (
+                cross_kv_cache.ndim < 2 or cross_kv_cache.shape[1] != 2
+            ):
+                def cache_layout(cache: torch.Tensor) -> str:
+                    return f"shape={tuple(cache.shape)}, strides={tuple(cache.stride())}"
+
+                def backend_identity(layer: Any) -> str:
+                    impl = getattr(layer, "impl", None)
+                    if impl is None:
+                        return "unavailable"
+                    backend = getattr(impl, "backend", None)
+                    impl_name = f"{type(impl).__module__}.{type(impl).__qualname__}"
+                    if backend is None:
+                        return impl_name
+                    return f"{impl_name} (backend={backend})"
+
+                raise RuntimeError(
+                    "Unsupported merged-attention KV cache layout: expected a K/V "
+                    "dimension of size 2 at axis 1; "
+                    f"self cache {cache_layout(self_kv_cache)}; "
+                    f"cross cache {cache_layout(cross_kv_cache)}; "
+                    f"self backend={backend_identity(self.self_attn)}; "
+                    f"cross backend={backend_identity(cross_attn_layer)}"
+                )
             self_key_cache, self_value_cache = self_kv_cache.unbind(1)
             cross_key_cache, cross_value_cache = cross_kv_cache.unbind(1)
             token_positions = positions[:num_tokens].to(
