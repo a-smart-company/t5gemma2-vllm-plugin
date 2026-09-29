@@ -391,3 +391,99 @@ def test_paged_attention_matches_long_cross_prompt() -> None:
     )
 
     torch.testing.assert_close(actual, reference, atol=3e-2, rtol=3e-2)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_paged_attention_masks_initial_self_blocks_with_cross_attention() -> None:
+    torch.manual_seed(2)
+    device = torch.device("cuda")
+    dtype = torch.bfloat16
+    num_query_heads = 2
+    num_kv_heads = 1
+    head_dim = 64
+    page_size = 16
+    sliding_window = 512
+    block_n = 32
+    position = sliding_window + block_n + 1
+    self_len = position + 1
+    cross_len = 19
+    scale = head_dim**-0.5
+
+    query = torch.randn(
+        1, num_query_heads, head_dim, device=device, dtype=dtype
+    )
+    self_key = torch.randn(
+        self_len, num_kv_heads, head_dim, device=device, dtype=dtype
+    )
+    self_value = torch.randn_like(self_key)
+    cross_key = torch.randn(
+        cross_len, num_kv_heads, head_dim, device=device, dtype=dtype
+    )
+    cross_value = torch.randn_like(cross_key)
+
+    num_self_pages = (self_len + page_size - 1) // page_size
+    num_cross_pages = (cross_len + page_size - 1) // page_size
+    cache_shape = (
+        num_self_pages + num_cross_pages,
+        page_size,
+        num_kv_heads,
+        head_dim,
+    )
+    self_key_cache = torch.zeros(cache_shape, device=device, dtype=dtype)
+    self_value_cache = torch.zeros_like(self_key_cache)
+    cross_key_cache = torch.zeros_like(self_key_cache)
+    cross_value_cache = torch.zeros_like(self_key_cache)
+    self_block_table = torch.arange(
+        num_self_pages, device=device, dtype=torch.int32
+    )[None]
+    cross_block_table = (
+        torch.arange(num_cross_pages, device=device, dtype=torch.int32)
+        + num_self_pages
+    )[None]
+
+    for page in range(num_self_pages):
+        start = page * page_size
+        count = min(page_size, self_len - start)
+        self_key_cache[page, :count] = self_key[start : start + count]
+        self_value_cache[page, :count] = self_value[start : start + count]
+    for page in range(num_cross_pages):
+        start = page * page_size
+        count = min(page_size, cross_len - start)
+        physical_page = num_self_pages + page
+        cross_key_cache[physical_page, :count] = cross_key[start : start + count]
+        cross_value_cache[physical_page, :count] = cross_value[start : start + count]
+
+    positions = torch.tensor([position], device=device, dtype=torch.int32)
+    actual = flash_t5gemma2_paged_merged_attention(
+        query,
+        self_key_cache,
+        self_value_cache,
+        cross_key_cache,
+        cross_value_cache,
+        positions,
+        torch.tensor([0, 1], device=device, dtype=torch.int32),
+        torch.tensor([self_len], device=device, dtype=torch.int32),
+        torch.tensor([cross_len], device=device, dtype=torch.int32),
+        self_block_table,
+        cross_block_table,
+        max_query_len=1,
+        sliding_window=sliding_window,
+        sm_scale=scale,
+    )
+
+    reference = flash_t5gemma2_attention(
+        query.unsqueeze(0).transpose(1, 2),
+        torch.cat([self_key, cross_key]).unsqueeze(0).transpose(1, 2),
+        torch.cat([self_value, cross_value]).unsqueeze(0).transpose(1, 2),
+        key_mask=torch.ones(
+            1, self_len + cross_len, device=device, dtype=torch.int32
+        ),
+        q_start_pos=positions,
+        is_causal=True,
+        self_len=self_len,
+        sliding_window=sliding_window,
+        sm_scale=scale,
+    ).transpose(1, 2).squeeze(0)
+
+    assert torch.isfinite(actual).all()
+    torch.testing.assert_close(actual, reference, atol=3e-2, rtol=3e-2)
