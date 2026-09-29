@@ -14,7 +14,6 @@ from t5gemma2_vllm_plugin.merged_cross_attention import (
 )
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 @pytest.mark.parametrize("layout", ["five_dimensional", "packed_four_dimensional"])
 def test_split_kv_cache_layouts_preserve_values_and_strides(layout: str) -> None:
     # kv_heads=2 makes shape-based guesses particularly error-prone; ndim is
