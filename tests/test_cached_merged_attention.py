@@ -23,7 +23,9 @@ def test_split_kv_cache_layouts_preserve_values_and_strides(layout: str) -> None
         cache = torch.empty(
             num_blocks, 2, page_size, num_kv_heads, head_size
         )
-        expected_key = torch.arange(cache[:, 0].numel()).reshape_as(cache[:, 0])
+        expected_key = torch.arange(
+            cache[:, 0].numel(), dtype=cache.dtype
+        ).reshape_as(cache[:, 0])
         expected_value = expected_key + 10_000
         cache[:, 0].copy_(expected_key)
         cache[:, 1].copy_(expected_value)
@@ -32,7 +34,9 @@ def test_split_kv_cache_layouts_preserve_values_and_strides(layout: str) -> None
         cache = torch.empty(
             num_blocks, num_kv_heads, page_size, 2 * head_size
         )
-        expected_key = torch.arange(num_blocks * page_size * num_kv_heads * head_size)
+        expected_key = torch.arange(
+            num_blocks * page_size * num_kv_heads * head_size, dtype=cache.dtype
+        )
         expected_key = expected_key.reshape(num_blocks, page_size, num_kv_heads, head_size)
         expected_value = expected_key + 10_000
         cache.transpose(1, 2).copy_(torch.cat([expected_key, expected_value], dim=-1))
