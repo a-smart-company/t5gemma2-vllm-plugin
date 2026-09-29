@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from t5gemma2_vllm_plugin.merged_cross_attention import (
     _build_cross_slot_mapping,
+    _split_kv_cache,
 )
 from t5gemma2_vllm_plugin.kernels.flash_t5gemma2_attention import (
     flash_t5gemma2_attention,
@@ -15,6 +16,55 @@ from t5gemma2_vllm_plugin.kernels.flash_t5gemma2_attention import (
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+@pytest.mark.parametrize("layout", ["five_dimensional", "packed_four_dimensional"])
+def test_split_kv_cache_layouts_preserve_values_and_strides(layout: str) -> None:
+    # kv_heads=2 makes shape-based guesses particularly error-prone; ndim is
+    # the discriminator between the two documented backend layouts.
+    num_blocks, num_kv_heads, page_size, head_size = 3, 2, 4, 5
+    if layout == "five_dimensional":
+        cache = torch.empty(
+            num_blocks, 2, page_size, num_kv_heads, head_size
+        )
+        expected_key = torch.arange(cache[:, 0].numel()).reshape_as(cache[:, 0])
+        expected_value = expected_key + 10_000
+        cache[:, 0].copy_(expected_key)
+        cache[:, 1].copy_(expected_value)
+        expected_strides = (cache[:, 0].stride(), cache[:, 1].stride())
+    else:
+        cache = torch.empty(
+            num_blocks, num_kv_heads, page_size, 2 * head_size
+        )
+        expected_key = torch.arange(num_blocks * page_size * num_kv_heads * head_size)
+        expected_key = expected_key.reshape(num_blocks, page_size, num_kv_heads, head_size)
+        expected_value = expected_key + 10_000
+        cache.transpose(1, 2).copy_(torch.cat([expected_key, expected_value], dim=-1))
+        expected_strides = (cache.transpose(1, 2).stride(),) * 2
+
+    key_cache, value_cache = _split_kv_cache(
+        cache, num_kv_heads=num_kv_heads, head_size=head_size
+    )
+    torch.testing.assert_close(key_cache, expected_key)
+    torch.testing.assert_close(value_cache, expected_value)
+    assert key_cache.shape == (num_blocks, page_size, num_kv_heads, head_size)
+    assert value_cache.shape == key_cache.shape
+    assert (key_cache.stride(), value_cache.stride()) == expected_strides
+
+
+@pytest.mark.parametrize(
+    "cache",
+    [
+        torch.empty(3, 2, 4, 10),  # wrong kv-head dimension
+        torch.empty(3, 2, 4, 9),  # packed head size is not 2 * head_size
+        torch.empty(3, 3, 4, 2, 5),  # wrong K/V dimension
+        torch.empty(3, 2, 4, 2, 6),  # wrong head size
+        torch.empty(3, 2, 4, 2, 5, 1),  # unsupported rank
+    ],
+)
+def test_split_kv_cache_rejects_malformed_shapes(cache: torch.Tensor) -> None:
+    with pytest.raises(ValueError, match="unsupported cache dimensions"):
+        _split_kv_cache(cache, num_kv_heads=1, head_size=5)
+
+
 def test_flash_attention_long_sliding_window_has_no_masked_block_nans() -> None:
     torch.manual_seed(3)
     device = torch.device("cuda")
