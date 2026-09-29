@@ -3,15 +3,14 @@ from __future__ import annotations
 import pytest
 import torch
 import torch.nn.functional as F
-
-from t5gemma2_vllm_plugin.merged_cross_attention import (
-    _build_cross_slot_mapping,
-    _split_kv_cache,
-)
 from t5gemma2_vllm_plugin.kernels.flash_t5gemma2_attention import (
     flash_t5gemma2_attention,
     flash_t5gemma2_cached_single_attention,
     flash_t5gemma2_paged_merged_attention,
+)
+from t5gemma2_vllm_plugin.merged_cross_attention import (
+    _build_cross_slot_mapping,
+    _split_kv_cache,
 )
 
 

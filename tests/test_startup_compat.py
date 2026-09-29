@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import torch
-from torch import nn
-
 from t5gemma2_vllm_plugin.vllm_adapter import T5Gemma2VllmForConditionalGeneration
+from torch import nn
 
 
 class _ForwardRecorder(nn.Module):
