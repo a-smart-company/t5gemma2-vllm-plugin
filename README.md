@@ -195,6 +195,10 @@ Mean acceptance length including the bonus token is:
 
 ## Notes and limitations
 
+- For the job-ad text-only probe only, set `T5GEMMA2_TEXT_ONLY=1` before startup
+  when the installed vLLM Siglip wrapper cannot load vision weights. This is an
+  explicit opt-in to skip those weights; image inputs are rejected in this mode.
+  Do not set it when serving image-capable workloads.
 - The adapter targets text encoder inputs. The T5Gemma 2 vision path is present
   in the vendored model code but has not been benchmarked as part of this
   plugin packaging.
