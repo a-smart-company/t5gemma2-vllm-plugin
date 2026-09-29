@@ -199,6 +199,10 @@ Mean acceptance length including the bonus token is:
   when the installed vLLM Siglip wrapper cannot load vision weights. This is an
   explicit opt-in to skip those weights; image inputs are rejected in this mode.
   Do not set it when serving image-capable workloads.
+- The Sparkie text-only compatibility path is experimental, not a validated
+  structured-extraction deployment: a synthetic constrained JSON request works
+  across level-1 sleep/wake, but a full-schema real-ad request fails constrained
+  decoding. Do not use it for production extraction until that is resolved.
 - The adapter targets text encoder inputs. The T5Gemma 2 vision path is present
   in the vendored model code but has not been benchmarked as part of this
   plugin packaging.
