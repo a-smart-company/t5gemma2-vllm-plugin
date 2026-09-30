@@ -29,6 +29,37 @@ from .kernels.flash_t5gemma2_attention import (
 )
 
 
+def _split_kv_cache(
+    cache: torch.Tensor,
+    *,
+    num_kv_heads: int,
+    head_size: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Adapt supported vLLM cache layouts to [blocks, page, heads, head_size]."""
+    if cache.ndim == 5:
+        if (
+            cache.shape[1] == 2
+            and cache.shape[3] == num_kv_heads
+            and cache.shape[4] == head_size
+        ):
+            key_cache, value_cache = cache.unbind(dim=1)
+            return key_cache, value_cache
+    elif cache.ndim == 4:
+        if cache.shape[1] == num_kv_heads and cache.shape[3] == 2 * head_size:
+            # Sparkie's FlashAttention cache is [blocks, heads, page, 2*head].
+            # Match FlashAttentionImpl.do_kv_cache_update's transpose/split views.
+            key_cache, value_cache = cache.transpose(1, 2).split(head_size, dim=-1)
+            return key_cache, value_cache
+
+    raise ValueError(
+        "unsupported cache dimensions: "
+        f"shape={tuple(cache.shape)}, strides={tuple(cache.stride())}, "
+        f"ndim={cache.ndim}, expected either "
+        f"[blocks, 2, page, {num_kv_heads}, {head_size}] or "
+        f"[blocks, {num_kv_heads}, page, {2 * head_size}]"
+    )
+
+
 def _split_and_pad_cross_kv(
     cross_key: torch.Tensor,
     cross_value: torch.Tensor,
@@ -252,8 +283,33 @@ class MergedCrossAttention(nn.Module):
         if cross_meta is not None and self_kv_cache.numel() and cross_kv_cache.numel():
             if positions is None:
                 raise ValueError("positions are required for paged merged attention")
-            self_key_cache, self_value_cache = self_kv_cache.unbind(1)
-            cross_key_cache, cross_value_cache = cross_kv_cache.unbind(1)
+            def backend_identity(layer: Any) -> str:
+                impl = getattr(layer, "impl", None)
+                if impl is None:
+                    return "unavailable"
+                backend = getattr(impl, "backend", None)
+                impl_name = f"{type(impl).__module__}.{type(impl).__qualname__}"
+                if backend is None:
+                    return impl_name
+                return f"{impl_name} (backend={backend})"
+
+            try:
+                self_key_cache, self_value_cache = _split_kv_cache(
+                    self_kv_cache,
+                    num_kv_heads=self.num_kv_heads,
+                    head_size=self.head_size,
+                )
+                cross_key_cache, cross_value_cache = _split_kv_cache(
+                    cross_kv_cache,
+                    num_kv_heads=self.num_kv_heads,
+                    head_size=self.head_size,
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    "Unsupported merged-attention KV cache layout: "
+                    f"{exc}; self backend={backend_identity(self.self_attn)}; "
+                    f"cross backend={backend_identity(cross_attn_layer)}"
+                ) from exc
             token_positions = positions[:num_tokens].to(
                 device=query.device, dtype=torch.long
             )

@@ -541,14 +541,16 @@ def _flash_t5gemma2_paged_merged_fwd_kernel(
             valid &= (q_pos[:, None] - key_pos[None, :]) < sliding_window
         qk = tl.where(valid, qk, float("-inf"))
 
+        row_has_valid = tl.sum(valid.to(tl.int32), axis=1) > 0
         m_ij = tl.max(qk, axis=1)
         m_new = tl.maximum(m_i, m_ij)
-        p = tl.exp(qk - m_new[:, None])
-        alpha = tl.exp(m_i - m_new)
+        safe_m = tl.where(row_has_valid, m_new, 0.0)
+        p = tl.where(valid, tl.exp(qk - safe_m[:, None]), 0.0)
+        alpha = tl.where(row_has_valid, tl.exp(m_i - safe_m), 1.0)
         acc = acc * alpha[:, None]
         acc += tl.dot(p, v.to(tl.float32), allow_tf32=False)
         l_i = l_i * alpha + tl.sum(p, axis=1)
-        m_i = m_new
+        m_i = tl.where(row_has_valid, m_new, m_i)
 
     cross_len = tl.load(Cross_Seq_Lens + pid_b)
     num_cross_blocks = tl.cdiv(cross_len, BLOCK_N)
@@ -582,16 +584,19 @@ def _flash_t5gemma2_paged_merged_fwd_kernel(
         qk *= sm_scale
         if HAS_SOFTCAP:
             qk = tl.extra.cuda.libdevice.tanh(qk / softcap) * softcap
-        qk = tl.where(q_valid[:, None] & key_valid[None, :], qk, float("-inf"))
+        valid = q_valid[:, None] & key_valid[None, :]
+        qk = tl.where(valid, qk, float("-inf"))
 
+        row_has_valid = tl.sum(valid.to(tl.int32), axis=1) > 0
         m_ij = tl.max(qk, axis=1)
         m_new = tl.maximum(m_i, m_ij)
-        p = tl.exp(qk - m_new[:, None])
-        alpha = tl.exp(m_i - m_new)
+        safe_m = tl.where(row_has_valid, m_new, 0.0)
+        p = tl.where(valid, tl.exp(qk - safe_m[:, None]), 0.0)
+        alpha = tl.where(row_has_valid, tl.exp(m_i - safe_m), 1.0)
         acc = acc * alpha[:, None]
         acc += tl.dot(p, v.to(tl.float32), allow_tf32=False)
         l_i = l_i * alpha + tl.sum(p, axis=1)
-        m_i = m_new
+        m_i = tl.where(row_has_valid, m_new, m_i)
 
     acc /= l_i[:, None]
     out_ptrs = (

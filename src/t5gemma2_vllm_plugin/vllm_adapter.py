@@ -320,7 +320,9 @@ class T5Gemma2VllmForConditionalGeneration(
     ) -> torch.Tensor | tuple[torch.Tensor, list[torch.Tensor]]:
         del intermediate_tensors
         if isinstance(encoder_outputs, list):
-            encoder_outputs = torch.cat(encoder_outputs, dim=0)
+            encoder_outputs = (
+                torch.cat(encoder_outputs, dim=0) if encoder_outputs else None
+            )
         return self.model(input_ids, positions, inputs_embeds, encoder_outputs)
 
     def compute_logits(self, hidden_states: torch.Tensor) -> torch.Tensor | None:

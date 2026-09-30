@@ -881,6 +881,7 @@ class T5Gemma2Encoder(nn.Module):
         del cache_config  # The encoder path does not use paged KV cache.
         self.outer_config = outer_config
         self.config = text_config
+        self.text_only_mode = os.environ.get("T5GEMMA2_TEXT_ONLY") == "1"
         self.quant_config = quant_config
         eoi_token_index = getattr(outer_config, "eoi_token_index", None)
         self.use_optimized_attention = (
@@ -947,6 +948,11 @@ class T5Gemma2Encoder(nn.Module):
         return self.embed_tokens(input_ids)
 
     def get_image_features(self, pixel_values: torch.Tensor) -> torch.Tensor:
+        if self.text_only_mode:
+            raise ValueError(
+                "Image inputs are disabled because T5GEMMA2_TEXT_ONLY=1. "
+                "Unset this variable and restart with a vision-capable checkpoint."
+            )
         if self.vision_tower is None or self.multi_modal_projector is None:
             raise ValueError("This encoder configuration does not have a vision tower.")
         if pixel_values.dim() == 3:
@@ -1166,8 +1172,21 @@ class T5Gemma2Encoder(nn.Module):
                 loaded_params.add(name)
 
         if self.vision_tower is not None and vision_weights:
-            for name in self.vision_tower.load_weights(vision_weights):
-                loaded_params.add(f"vision_tower.{name}")
+            vision_load_weights = getattr(self.vision_tower, "load_weights", None)
+            if callable(vision_load_weights):
+                for name in vision_load_weights(vision_weights):
+                    loaded_params.add(f"vision_tower.{name}")
+            elif self.text_only_mode:
+                # Explicit opt-in for text-only probes using checkpoints whose
+                # vLLM Siglip wrapper cannot load its vision weights.
+                pass
+            else:
+                raise RuntimeError(
+                    "The vision tower does not implement load_weights, so this "
+                    "model's vision weights cannot be loaded. To run a text-only "
+                    "probe, explicitly set T5GEMMA2_TEXT_ONLY=1; image inputs will "
+                    "then be rejected."
+                )
 
         return loaded_params
 
